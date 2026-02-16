@@ -1,0 +1,88 @@
+name: Scrape Framer & Deploy to GitHub Pages
+
+on:
+  # Manually trigger from GitHub Actions tab
+  workflow_dispatch:
+  # Also runs on push to main (optional - remove if you only want manual)
+  push:
+    branches: ["main"]
+
+# Sets permissions for GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  scrape-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scrape Framer site
+        run: |
+          # Mirror the entire Framer site
+          wget \
+            --mirror \
+            --convert-links \
+            --adjust-extension \
+            --page-requisites \
+            --no-parent \
+            --timeout=60 \
+            --tries=5 \
+            --wait=1 \
+            --random-wait \
+            -e robots=off \
+            -U "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            https://jsinclairstudiotesr.framer.website/ \
+            -P site-raw || true
+
+          # Move the scraped content to a clean directory
+          mv site-raw/jsinclairstudiotesr.framer.website site-output
+
+      - name: Remove Framer watermark/badge
+        run: |
+          # Remove the "Made in Framer" badge from all HTML files
+          find site-output -name "*.html" -o -name "*.htm" | while read file; do
+            # Remove the Framer badge container (common patterns)
+            sed -i '/<div id="__framer-badge-container"/,/<\/div>/d' "$file"
+            sed -i '/framer-badge/d' "$file"
+            sed -i '/Made in Framer/d' "$file"
+            sed -i '/data-framer-badge/d' "$file"
+          done
+
+          # Also remove from JS files if embedded there
+          find site-output -name "*.js" | while read file; do
+            sed -i 's/framer-badge-container//g' "$file"
+            sed -i '/Made in Framer/d' "$file"
+          done
+
+          echo "✅ Framer watermark removed"
+
+      - name: List output for debugging
+        run: |
+          echo "📁 Site structure:"
+          find site-output -type f | head -50
+          echo "---"
+          echo "Total files: $(find site-output -type f | wc -l)"
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'site-output'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
