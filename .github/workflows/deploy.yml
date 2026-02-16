@@ -473,32 +473,28 @@ jobs:
 
           function buildSEOTags(pagePath) {
             const meta = PAGE_META[pagePath] || {};
-            const canonical = `https://${SITE_DOMAIN}${pagePath === '/' ? '' : pagePath}`;
+            const canonical = 'https://' + SITE_DOMAIN + (pagePath === '/' ? '' : pagePath);
             const title = meta.title || SITE_NAME;
-            const description = meta.description || `${SITE_NAME} — Strategic brand & digital partner for growth-stage companies.`;
-
-            return `
-    <!-- SEO Meta -->
-    <meta name="description" content="${description}" />
-    <link rel="canonical" href="${canonical}" />
-
-    <!-- Open Graph -->
-    <meta property="og:title" content="${title}" />
-    <meta property="og:description" content="${description}" />
-    <meta property="og:url" content="${canonical}" />
-    <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="${SITE_NAME}" />
-    <meta property="og:locale" content="en_GB" />
-
-    <!-- Twitter Card -->
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="${title}" />
-    <meta name="twitter:description" content="${description}" />
-
-    <!-- Security Meta -->
-    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
-    <meta name="referrer" content="strict-origin-when-cross-origin" />
-    `;
+            const description = meta.description || (SITE_NAME + ' — Strategic brand & digital partner for growth-stage companies.');
+            const tags = [];
+            tags.push('<!-- SEO Meta -->');
+            tags.push('<meta name="description" content="' + description + '" />');
+            tags.push('<link rel="canonical" href="' + canonical + '" />');
+            tags.push('<!-- Open Graph -->');
+            tags.push('<meta property="og:title" content="' + title + '" />');
+            tags.push('<meta property="og:description" content="' + description + '" />');
+            tags.push('<meta property="og:url" content="' + canonical + '" />');
+            tags.push('<meta property="og:type" content="website" />');
+            tags.push('<meta property="og:site_name" content="' + SITE_NAME + '" />');
+            tags.push('<meta property="og:locale" content="en_GB" />');
+            tags.push('<!-- Twitter Card -->');
+            tags.push('<meta name="twitter:card" content="summary_large_image" />');
+            tags.push('<meta name="twitter:title" content="' + title + '" />');
+            tags.push('<meta name="twitter:description" content="' + description + '" />');
+            tags.push('<!-- Security Meta -->');
+            tags.push('<meta http-equiv="X-Content-Type-Options" content="nosniff" />');
+            tags.push('<meta name="referrer" content="strict-origin-when-cross-origin" />');
+            return tags.join('\n            ');
           }
 
           function processHTML(html, pagePath) {
