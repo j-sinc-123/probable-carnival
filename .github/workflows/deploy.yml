@@ -687,6 +687,109 @@ jobs:
             sed -i '/<script>\s*<\/script>/d' "$file"
           done
 
+          # Inject hover animation CSS into all pages
+          # (Replaces Framer Motion JS-driven hover effects with pure CSS)
+          cat > /tmp/hover.css << 'HOVERCSS'
+          <style id="hover-animations">
+          /* Project card image zoom on hover */
+          a[class*="framer-"] img {
+            transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            will-change: transform;
+          }
+          a[class*="framer-"]:hover img {
+            transform: scale(1.05);
+          }
+          a[class*="framer-"] > div:first-child {
+            overflow: hidden;
+          }
+
+          /* Nav link underline on hover */
+          nav a[class*="framer-"] {
+            position: relative;
+          }
+          nav a[class*="framer-"]::after {
+            content: "";
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 1px;
+            background: currentColor;
+            transform: scaleX(0);
+            transform-origin: right;
+            transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+          }
+          nav a[class*="framer-"]:hover::after {
+            transform: scaleX(1);
+            transform-origin: left;
+          }
+
+          /* Inline text link underline on hover */
+          .framer-text a {
+            position: relative;
+            display: inline-block;
+          }
+          .framer-text a::after {
+            content: "";
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            width: 100%;
+            height: 1px;
+            background: currentColor;
+            transform: scaleX(0);
+            transform-origin: right;
+            transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+          }
+          .framer-text a:hover::after {
+            transform: scaleX(1);
+            transform-origin: left;
+          }
+
+          /* Project card subtle lift on hover */
+          a[class*="framer-"][href*="projects/"] {
+            transition: transform 0.3s ease;
+          }
+          a[class*="framer-"][href*="projects/"]:hover {
+            transform: translateY(-2px);
+          }
+
+          /* Smooth transitions on interactive elements */
+          a, button {
+            transition: opacity 0.2s ease, color 0.2s ease;
+          }
+          </style>
+          HOVERCSS
+
+          python3 << 'PYINJECT'
+          import os, glob
+          with open('/tmp/hover.css', 'r') as f:
+              css = f.read().strip()
+          for html_file in glob.glob('site-output/**/*.html', recursive=True):
+              if '404.html' in html_file:
+                  continue
+              with open(html_file, 'r') as f:
+                  content = f.read()
+              if '</head>' in content and 'hover-animations' not in content:
+                  content = content.replace('</head>', css + '\n</head>')
+                  with open(html_file, 'w') as f:
+                      f.write(content)
+                  print(f'  ✅ Injected hover CSS: {html_file}')
+          # Also handle root level html files
+          for html_file in glob.glob('site-output/*.html'):
+              if '404.html' in html_file:
+                  continue
+              with open(html_file, 'r') as f:
+                  content = f.read()
+              if '</head>' in content and 'hover-animations' not in content:
+                  content = content.replace('</head>', css + '\n</head>')
+                  with open(html_file, 'w') as f:
+                      f.write(content)
+                  print(f'  ✅ Injected hover CSS: {html_file}')
+          PYINJECT
+
+          echo "✅ Hover animations injected"
+
           # Generate 404 page
           cat > site-output/404.html << 'EOF'
           <!DOCTYPE html>
