@@ -258,12 +258,11 @@ jobs:
             await page.setRequestInterception(true);
             page.on('request', (req) => {
               const reqUrl = req.url();
-              // Block analytics, editor, and tracking scripts during scrape
+              // Only block editor & analytics scripts — keep core runtime for animations
               if (reqUrl.includes('google-analytics.com') ||
                   reqUrl.includes('googletagmanager.com') ||
                   reqUrl.includes('events.framer.com') ||
                   reqUrl.includes('api.framer.com') ||
-                  reqUrl.includes('app.framerstatic.com') ||
                   reqUrl.includes('framer.com/edit') ||
                   reqUrl.includes('framer.com/bootstrap')) {
                 req.abort();
@@ -324,44 +323,35 @@ jobs:
                 }
               });
 
-              // Remove ALL Framer runtime/editor script tags
+              // Remove only EDITOR-specific scripts (keep core runtime for animations)
               document.querySelectorAll('script').forEach(el => {
                 const src = el.getAttribute('src') || '';
                 const text = el.textContent || '';
+                // Only remove editor bar, analytics, and tracking scripts
                 if (
-                  src.includes('framer.com') ||
-                  src.includes('framerstatic.com') ||
+                  src.includes('framer.com/edit') ||
+                  src.includes('framer.com/bootstrap') ||
                   src.includes('events.framer.com') ||
-                  src.includes('framerusercontent.com/sites/') ||
+                  src.includes('api.framer.com') ||
                   src.includes('google-analytics.com') ||
                   src.includes('googletagmanager.com') ||
-                  text.includes('__framer') ||
-                  text.includes('framer.com')
+                  (src.includes('framerstatic.com') && src.includes('editorbar'))
                 ) {
                   el.remove();
                 }
               });
 
-              // Remove Framer-specific link/preload tags
+              // Remove only Framer editor-specific link tags (keep runtime preloads)
               document.querySelectorAll('link').forEach(el => {
                 const href = el.getAttribute('href') || '';
-                if (href.includes('framerusercontent.com/sites/') ||
-                    href.includes('framerstatic.com') ||
-                    href.includes('framer.com')) {
-                  // Keep font preconnects, remove the rest
-                  if (!href.includes('fonts.googleapis.com') && !href.includes('fonts.gstatic.com')) {
-                    el.remove();
-                  }
+                if (href.includes('framer.com/edit') ||
+                    href.includes('events.framer.com')) {
+                  el.remove();
                 }
               });
 
-              // Remove stylesheet links (we inline all CSS)
-              document.querySelectorAll('link[rel="stylesheet"]').forEach(el => el.remove());
-
-              // Remove Framer module preloads
-              document.querySelectorAll('link[rel="modulepreload"]').forEach(el => el.remove());
-
-              // ─── Inject clean inlined CSS ───
+              // Keep stylesheet links and module preloads (needed for animations)
+              // Only inline additional CSS as a supplement
               const styleTag = document.createElement('style');
               styleTag.textContent = allCSS;
               document.head.appendChild(styleTag);
@@ -502,31 +492,18 @@ jobs:
             const seoTags = buildSEOTags(pagePath);
             html = html.replace('</head>', `${seoTags}\n</head>`);
 
-            // Strip any remaining Framer script references that survived the page.evaluate
-            html = html.replace(/<script[^>]*framerusercontent\.com\/sites\/[^>]*>[\s\S]*?<\/script>/gi, '');
-            html = html.replace(/<script[^>]*framer\.com[^>]*>[\s\S]*?<\/script>/gi, '');
-            html = html.replace(/<script[^>]*framerstatic\.com[^>]*>[\s\S]*?<\/script>/gi, '');
+            // Strip only editor-specific scripts (keep core runtime for animations)
+            html = html.replace(/<script[^>]*framer\.com\/edit[^>]*>[\s\S]*?<\/script>/gi, '');
+            html = html.replace(/<script[^>]*framer\.com\/bootstrap[^>]*>[\s\S]*?<\/script>/gi, '');
+            html = html.replace(/<script[^>]*events\.framer\.com[^>]*>[\s\S]*?<\/script>/gi, '');
+            html = html.replace(/<script[^>]*api\.framer\.com[^>]*>[\s\S]*?<\/script>/gi, '');
             html = html.replace(/<script[^>]*googletagmanager\.com[^>]*>[\s\S]*?<\/script>/gi, '');
             html = html.replace(/<script[^>]*google-analytics\.com[^>]*>[\s\S]*?<\/script>/gi, '');
-            html = html.replace(/<script[^>]*events\.framer\.com[^>]*>[\s\S]*?<\/script>/gi, '');
-
-            // Remove inline scripts that reference Framer internals
-            html = html.replace(/<script>[\s\S]*?__framer[\s\S]*?<\/script>/gi, '');
-            html = html.replace(/<script>[\s\S]*?framer\.com[\s\S]*?<\/script>/gi, '');
-
-            // Remove Framer link/preload tags
-            html = html.replace(/<link[^>]*framerusercontent\.com\/sites\/[^>]*>/gi, '');
-            html = html.replace(/<link[^>]*framerstatic\.com[^>]*>/gi, '');
-            html = html.replace(/<link[^>]*rel="modulepreload"[^>]*>/gi, '');
+            html = html.replace(/<script[^>]*editorbar[^>]*>[\s\S]*?<\/script>/gi, '');
 
             // Remove Framer badge remnants
             html = html.replace(/<div[^>]*id="__framer-badge-container"[^>]*>[\s\S]*?<\/div>/gi, '');
             html = html.replace(/Made in Framer/gi, '');
-
-            // Remove data-framer-hydrate-v2 attribute (triggers hydration)
-            html = html.replace(/data-framer-hydrate-v2="[^"]*"/gi, '');
-            html = html.replace(/data-framer-ssr-released-at="[^"]*"/gi, '');
-            html = html.replace(/data-framer-page-optimized-at="[^"]*"/gi, '');
 
             return html;
           }
@@ -686,109 +663,6 @@ jobs:
             sed -i 's/<script><\/script>//g' "$file"
             sed -i '/<script>\s*<\/script>/d' "$file"
           done
-
-          # Inject hover animation CSS into all pages
-          # (Replaces Framer Motion JS-driven hover effects with pure CSS)
-          cat > /tmp/hover.css << 'HOVERCSS'
-          <style id="hover-animations">
-          /* Project card image zoom on hover */
-          a[class*="framer-"] img {
-            transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-            will-change: transform;
-          }
-          a[class*="framer-"]:hover img {
-            transform: scale(1.05);
-          }
-          a[class*="framer-"] > div:first-child {
-            overflow: hidden;
-          }
-
-          /* Nav link underline on hover */
-          nav a[class*="framer-"] {
-            position: relative;
-          }
-          nav a[class*="framer-"]::after {
-            content: "";
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            width: 100%;
-            height: 1px;
-            background: currentColor;
-            transform: scaleX(0);
-            transform-origin: right;
-            transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-          }
-          nav a[class*="framer-"]:hover::after {
-            transform: scaleX(1);
-            transform-origin: left;
-          }
-
-          /* Inline text link underline on hover */
-          .framer-text a {
-            position: relative;
-            display: inline-block;
-          }
-          .framer-text a::after {
-            content: "";
-            position: absolute;
-            bottom: -1px;
-            left: 0;
-            width: 100%;
-            height: 1px;
-            background: currentColor;
-            transform: scaleX(0);
-            transform-origin: right;
-            transition: transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-          }
-          .framer-text a:hover::after {
-            transform: scaleX(1);
-            transform-origin: left;
-          }
-
-          /* Project card subtle lift on hover */
-          a[class*="framer-"][href*="projects/"] {
-            transition: transform 0.3s ease;
-          }
-          a[class*="framer-"][href*="projects/"]:hover {
-            transform: translateY(-2px);
-          }
-
-          /* Smooth transitions on interactive elements */
-          a, button {
-            transition: opacity 0.2s ease, color 0.2s ease;
-          }
-          </style>
-          HOVERCSS
-
-          python3 << 'PYINJECT'
-          import os, glob
-          with open('/tmp/hover.css', 'r') as f:
-              css = f.read().strip()
-          for html_file in glob.glob('site-output/**/*.html', recursive=True):
-              if '404.html' in html_file:
-                  continue
-              with open(html_file, 'r') as f:
-                  content = f.read()
-              if '</head>' in content and 'hover-animations' not in content:
-                  content = content.replace('</head>', css + '\n</head>')
-                  with open(html_file, 'w') as f:
-                      f.write(content)
-                  print(f'  ✅ Injected hover CSS: {html_file}')
-          # Also handle root level html files
-          for html_file in glob.glob('site-output/*.html'):
-              if '404.html' in html_file:
-                  continue
-              with open(html_file, 'r') as f:
-                  content = f.read()
-              if '</head>' in content and 'hover-animations' not in content:
-                  content = content.replace('</head>', css + '\n</head>')
-                  with open(html_file, 'w') as f:
-                      f.write(content)
-                  print(f'  ✅ Injected hover CSS: {html_file}')
-          PYINJECT
-
-          echo "✅ Hover animations injected"
 
           # Generate 404 page
           cat > site-output/404.html << 'EOF'
