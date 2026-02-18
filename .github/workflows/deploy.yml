@@ -720,11 +720,20 @@ jobs:
         with:
           enablement: true
 
+      - name: Delete old artifact
+        run: |
+          gh api repos/${{ github.repository }}/actions/artifacts \
+            --jq '.artifacts[] | select(.name=="github-pages") | .id' \
+          | while read id; do
+              gh api -X DELETE repos/${{ github.repository }}/actions/artifacts/$id || true
+            done
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: 'site-output'
-          overwrite: true
 
       - name: Deploy to GitHub Pages
         id: deployment
