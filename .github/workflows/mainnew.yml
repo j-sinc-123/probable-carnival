@@ -1,0 +1,598 @@
+name: Scrape Framer & Deploy to GitHub Pages
+
+# ============================================================
+# FRAMER → GITHUB PAGES DEPLOYMENT — J SINCLAIR STUDIO
+# ============================================================
+# Scrapes the published Framer site, injects correct SEO/OG
+# metadata, and deploys to GitHub Pages.
+#
+# Page titles come from Framer. Descriptions and OG/Twitter
+# tags are injected here — edit PAGE_META below to change them.
+# ============================================================
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+
+# ─── CONFIGURATION ───────────────────────────────────────────
+env:
+  FRAMER_URL: "https://jsinclairstudiotesr.framer.website"
+  SITE_DOMAIN: "jsinclairstudio.com"
+  SITE_NAME: "J Sinclair Studio"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  scrape-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install puppeteer
+
+      # ─── SCRAPER SCRIPT ─────────────────────────────────────
+      - name: Create scraper script
+        run: |
+          cat > scraper.js << 'SCRIPT'
+          const puppeteer = require('puppeteer');
+          const fs = require('fs');
+          const path = require('path');
+          const https = require('https');
+          const http = require('http');
+          const { URL } = require('url');
+          // ─── CONFIG (pulled from env vars) ───
+          const BASE_URL = process.env.FRAMER_URL || 'https://jsinclairstudiotesr.framer.website';
+          const SITE_DOMAIN = process.env.SITE_DOMAIN || 'jsinclairstudio.com';
+          const SITE_NAME = process.env.SITE_NAME || 'J Sinclair Studio';
+          const OUTPUT_DIR = 'site-output';
+          const ASSETS_DIR = path.join(OUTPUT_DIR, 'assets');
+          // ─── STATE ───
+          const VISITED = new Set();
+          const ASSETS_MAP = new Map();
+          const ALL_PAGES = [];
+          let assetCounter = 0;
+          // ─── SETUP DIRS ───
+          [OUTPUT_DIR, ASSETS_DIR, path.join(ASSETS_DIR, 'images'), path.join(ASSETS_DIR, 'video'), path.join(ASSETS_DIR, 'fonts')].forEach(dir => {
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+          });
+          // ─── SEO META PER PAGE ───
+          const PAGE_META = {
+            '/': {
+              title: 'J Sinclair Studio | Conversion-focused web & brand design',
+              description: 'Independent brand, UX and web design studio for growth-stage e-commerce, fintech and startups. Research-led, built on evidence. Virgin StartUp, Edge Connect, Elevate.',
+            },
+            '/about': {
+              title: 'About | J Sinclair Studio',
+              description: 'Ten years of brand, UX and web design. Virgin StartUp, fintech launches, and a four-year retained partnership, plus running an e-commerce brand of my own.',
+            },
+            '/projects': {
+              title: 'Projects | J Sinclair Studio',
+              description: 'Selected brand, UX and web work for Virgin StartUp, Edge Connect, Elevate and KLC Consulting.',
+            },
+            '/contact': {
+              title: 'Contact | J Sinclair Studio',
+              description: 'Start a project. Conversion-focused brand and web design for growth-stage e-commerce, fintech and startups.',
+            },
+            '/projects/elevate': {
+              title: 'Elevate | J Sinclair Studio',
+              description: 'Four-year retained brand and digital partnership, built from zero and evolved through every growth phase.',
+            },
+            '/projects/virgin-startup': {
+              title: 'Virgin StartUp | J Sinclair Studio',
+              description: 'UX lead on the Virgin StartUp loan platform. Application journey restructured around how founders evaluate funding.',
+            },
+            '/projects/edge-connect': {
+              title: 'Edge Connect | J Sinclair Studio',
+              description: 'Market-entry positioning, UX and site for a fintech infrastructure platform launching into a crowded technical category.',
+            },
+            '/projects/klc-consulting': {
+              title: 'KLC Consulting | J Sinclair Studio',
+              description: 'Trust-first brand and website for one of the few specialist music-industry accountants in a field of 40,000 UK firms.',
+            },
+          };
+          // ─── ASSET HELPERS ───
+          function getAssetSubdir(url) {
+            if (/\.(mp4|webm|mov|ogg)(\?|$)/i.test(url)) return 'video';
+            if (/\.(woff2?|ttf|otf|eot)(\?|$)/i.test(url)) return 'fonts';
+            return 'images';
+          }
+          function getExtFromUrl(url) {
+            try {
+              const pathname = new URL(url).pathname;
+              const match = pathname.match(/\.([a-zA-Z0-9]+)$/);
+              if (match) return '.' + match[1];
+            } catch (e) {}
+            if (/\.(mp4)(\?|$)/i.test(url)) return '.mp4';
+            if (/\.(webm)(\?|$)/i.test(url)) return '.webm';
+            if (/\.(png)(\?|$)/i.test(url)) return '.png';
+            if (/\.(jpg|jpeg)(\?|$)/i.test(url)) return '.jpg';
+            if (/\.(webp)(\?|$)/i.test(url)) return '.webp';
+            if (/\.(svg)(\?|$)/i.test(url)) return '.svg';
+            if (/\.(gif)(\?|$)/i.test(url)) return '.gif';
+            if (/\.(woff2)(\?|$)/i.test(url)) return '.woff2';
+            if (/\.(woff)(\?|$)/i.test(url)) return '.woff';
+            if (/\.(mp4|video|assets)/i.test(url)) return '.mp4';
+            return '.bin';
+          }
+          function downloadFile(url, dest, retries = 3) {
+            return new Promise((resolve, reject) => {
+              const dir = path.dirname(dest);
+              if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+              const client = url.startsWith('https') ? https : http;
+              const request = client.get(url, {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                  'Accept': '*/*',
+                  'Referer': BASE_URL + '/',
+                },
+                timeout: 30000,
+              }, (res) => {
+                if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                  return downloadFile(res.headers.location, dest, retries).then(resolve).catch(reject);
+                }
+                if (res.statusCode !== 200) {
+                  console.log(`    ⚠ HTTP ${res.statusCode}: ${url.substring(0, 80)}`);
+                  return resolve(false);
+                }
+                const stream = fs.createWriteStream(dest);
+                res.pipe(stream);
+                stream.on('finish', () => { stream.close(); resolve(true); });
+                stream.on('error', () => resolve(false));
+              });
+              request.on('error', () => {
+                if (retries > 0) {
+                  setTimeout(() => downloadFile(url, dest, retries - 1).then(resolve).catch(reject), 1000);
+                } else {
+                  resolve(false);
+                }
+              });
+              request.on('timeout', () => {
+                request.destroy();
+                if (retries > 0) {
+                  setTimeout(() => downloadFile(url, dest, retries - 1).then(resolve).catch(reject), 1000);
+                } else {
+                  resolve(false);
+                }
+              });
+            });
+          }
+          async function downloadAsset(url) {
+            if (ASSETS_MAP.has(url)) return ASSETS_MAP.get(url);
+            const subdir = getAssetSubdir(url);
+            const ext = getExtFromUrl(url);
+            const filename = `${subdir}-${++assetCounter}${ext}`;
+            const localPath = path.join(ASSETS_DIR, subdir, filename);
+            const relativePath = `assets/${subdir}/${filename}`;
+            console.log(`    📦 Downloading: ${url.substring(0, 80)}...`);
+            const success = await downloadFile(url, localPath);
+            if (success && fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
+              const size = (fs.statSync(localPath).size / 1024).toFixed(1);
+              console.log(`    ✅ ${relativePath} (${size} KiB)`);
+              ASSETS_MAP.set(url, relativePath);
+              return relativePath;
+            } else {
+              console.log(`    ❌ Failed: ${url.substring(0, 80)}`);
+              return null;
+            }
+          }
+          const FRAMER_JUNK_PATTERNS = [
+            /framer\.com\/edit/,
+            /framer\.com\/bootstrap/,
+            /events\.framer\.com/,
+            /api\.framer\.com/,
+            /app\.framerstatic\.com/,
+            /framer\.com\/script/,
+          ];
+          function isFramerJunkScript(src) {
+            return FRAMER_JUNK_PATTERNS.some(pattern => pattern.test(src));
+          }
+          async function getRenderedPage(browser, url) {
+            const page = await browser.newPage();
+            await page.setViewport({ width: 1440, height: 900 });
+            await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+            await page.setRequestInterception(true);
+            page.on('request', (req) => {
+              const reqUrl = req.url();
+              if (reqUrl.includes('google-analytics.com') ||
+                  reqUrl.includes('googletagmanager.com') ||
+                  reqUrl.includes('events.framer.com') ||
+                  reqUrl.includes('api.framer.com') ||
+                  reqUrl.includes('framer.com/edit') ||
+                  reqUrl.includes('framer.com/bootstrap')) {
+                req.abort();
+              } else {
+                req.continue();
+              }
+            });
+            try {
+              await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
+              await new Promise(r => setTimeout(r, 4000));
+              await page.evaluate(async () => {
+                await new Promise((resolve) => {
+                  let totalHeight = 0;
+                  const distance = 400;
+                  const timer = setInterval(() => {
+                    window.scrollBy(0, distance);
+                    totalHeight += distance;
+                    if (totalHeight >= document.body.scrollHeight) {
+                      clearInterval(timer);
+                      window.scrollTo(0, 0);
+                      resolve();
+                    }
+                  }, 100);
+                });
+              });
+              await new Promise(r => setTimeout(r, 2000));
+            } catch (err) {
+              console.log(`  ⚠ Timeout/error loading ${url}: ${err.message}`);
+            }
+            const result = await page.evaluate(() => {
+              let allCSS = '';
+              for (const sheet of document.styleSheets) {
+                try {
+                  for (const rule of sheet.cssRules) {
+                    allCSS += rule.cssText + '\n';
+                  }
+                } catch (e) {}
+              }
+              const badge = document.getElementById('__framer-badge-container');
+              if (badge) badge.remove();
+              document.querySelectorAll('[data-framer-badge]').forEach(el => el.remove());
+              document.querySelectorAll('a').forEach(el => {
+                const href = el.getAttribute('href') || '';
+                const text = (el.textContent || '').trim();
+                const title = el.getAttribute('title') || '';
+                if (href.includes('framer.com') && (text.includes('Framer') || title.includes('Framer') || text === '')) {
+                  if (!el.closest('nav')) el.remove();
+                }
+              });
+              document.querySelectorAll('script').forEach(el => {
+                const src = el.getAttribute('src') || '';
+                const text = el.textContent || '';
+                if (
+                  src.includes('framer.com/edit') ||
+                  src.includes('framer.com/bootstrap') ||
+                  src.includes('events.framer.com') ||
+                  src.includes('api.framer.com') ||
+                  src.includes('google-analytics.com') ||
+                  src.includes('googletagmanager.com') ||
+                  (src.includes('framerstatic.com') && src.includes('editorbar'))
+                ) {
+                  el.remove();
+                }
+              });
+              document.querySelectorAll('link').forEach(el => {
+                const href = el.getAttribute('href') || '';
+                if (href.includes('framer.com/edit') ||
+                    href.includes('events.framer.com')) {
+                  el.remove();
+                }
+              });
+              const styleTag = document.createElement('style');
+              styleTag.textContent = allCSS;
+              document.head.appendChild(styleTag);
+              const links = [];
+              document.querySelectorAll('a[href]').forEach(a => {
+                const href = a.getAttribute('href');
+                if (href && (href.startsWith('./') || href.startsWith('/')) && !href.includes('#')) {
+                  links.push(href);
+                }
+              });
+              const assetUrls = new Set();
+              document.querySelectorAll('img[src]').forEach(el => {
+                const src = el.getAttribute('src');
+                if (src && src.startsWith('http')) assetUrls.add(src);
+              });
+              document.querySelectorAll('img[srcset], source[srcset]').forEach(el => {
+                const srcset = el.getAttribute('srcset');
+                if (srcset) {
+                  srcset.split(',').forEach(part => {
+                    const url = part.trim().split(/\s+/)[0];
+                    if (url && url.startsWith('http')) assetUrls.add(url);
+                  });
+                }
+              });
+              document.querySelectorAll('video[src], video source[src]').forEach(el => {
+                const src = el.getAttribute('src');
+                if (src && src.startsWith('http')) assetUrls.add(src);
+              });
+              document.querySelectorAll('[style]').forEach(el => {
+                const style = el.getAttribute('style');
+                const matches = style.match(/url\(["']?(https?:\/\/[^"')]+)["']?\)/g);
+                if (matches) {
+                  matches.forEach(m => {
+                    const url = m.replace(/url\(["']?/, '').replace(/["']?\)/, '');
+                    assetUrls.add(url);
+                  });
+                }
+              });
+              const cssUrlMatches = allCSS.match(/url\(["']?(https?:\/\/[^"')]+)["']?\)/g);
+              if (cssUrlMatches) {
+                cssUrlMatches.forEach(m => {
+                  const url = m.replace(/url\(["']?/, '').replace(/["']?\)/, '');
+                  assetUrls.add(url);
+                });
+              }
+              const mainContent = document.querySelector('[data-framer-name="Content"]') ||
+                                  document.querySelector('.framer-yuhfbs') ||
+                                  document.querySelector('body > div:first-child');
+              if (mainContent && !document.querySelector('main')) {
+                mainContent.setAttribute('role', 'main');
+              }
+              document.querySelectorAll('[aria-hidden="true"] a, [aria-hidden="true"] button, [aria-hidden="true"] input').forEach(el => {
+                el.setAttribute('tabindex', '-1');
+              });
+              document.querySelectorAll('a').forEach(el => {
+                if (!el.textContent.trim() && !el.getAttribute('aria-label')) {
+                  const name = el.getAttribute('data-framer-name') || '';
+                  if (name) {
+                    el.setAttribute('aria-label', name);
+                  } else if (el.querySelector('svg')) {
+                    el.setAttribute('aria-label', 'Navigation link');
+                  }
+                }
+              });
+              return {
+                html: document.documentElement.outerHTML,
+                links,
+                assetUrls: Array.from(assetUrls),
+              };
+            });
+            await page.close();
+            return result;
+          }
+          function urlToFilePath(url) {
+            const parsed = new URL(url);
+            let pathname = parsed.pathname.replace(/\/$/, '') || '/index';
+            pathname = pathname.replace(/^\//, '');
+            if (!pathname || pathname === '') pathname = 'index';
+            if (!path.extname(pathname)) pathname += '.html';
+            return pathname;
+          }
+          function buildSEOTags(pagePath) {
+            const meta = PAGE_META[pagePath] || {};
+            const canonical = 'https://' + SITE_DOMAIN + (pagePath === '/' ? '' : pagePath);
+            const title = meta.title || SITE_NAME;
+            const description = meta.description || (SITE_NAME + ' — Conversion-focused brand and web design for growth-stage e-commerce, fintech and startups.');
+            const tags = [];
+            tags.push('<!-- SEO Meta -->');
+            tags.push('<meta name="description" content="' + description + '" />');
+            tags.push('<link rel="canonical" href="' + canonical + '" />');
+            tags.push('<!-- Open Graph -->');
+            tags.push('<meta property="og:title" content="' + title + '" />');
+            tags.push('<meta property="og:description" content="' + description + '" />');
+            tags.push('<meta property="og:url" content="' + canonical + '" />');
+            tags.push('<meta property="og:type" content="website" />');
+            tags.push('<meta property="og:site_name" content="' + SITE_NAME + '" />');
+            tags.push('<meta property="og:locale" content="en_GB" />');
+            tags.push('<!-- Twitter Card -->');
+            tags.push('<meta name="twitter:card" content="summary_large_image" />');
+            tags.push('<meta name="twitter:title" content="' + title + '" />');
+            tags.push('<meta name="twitter:description" content="' + description + '" />');
+            tags.push('<!-- Security Meta -->');
+            tags.push('<meta http-equiv="X-Content-Type-Options" content="nosniff" />');
+            tags.push('<meta name="referrer" content="strict-origin-when-cross-origin" />');
+            return tags.join('\n            ');
+          }
+          function processHTML(html, pagePath) {
+            const seoTags = buildSEOTags(pagePath);
+            html = html.replace('</head>', `${seoTags}\n</head>`);
+            html = html.replace(/<script[^>]*framer\.com\/edit[^>]*>[\s\S]*?<\/script>/gi, '');
+            html = html.replace(/<script[^>]*framer\.com\/bootstrap[^>]*>[\s\S]*?<\/script>/gi, '');
+            html = html.replace(/<script[^>]*events\.framer\.com[^>]*>[\s\S]*?<\/script>/gi, '');
+            html = html.replace(/<script[^>]*api\.framer\.com[^>]*>[\s\S]*?<\/script>/gi, '');
+            html = html.replace(/<script[^>]*googletagmanager\.com[^>]*>[\s\S]*?<\/script>/gi, '');
+            html = html.replace(/<script[^>]*google-analytics\.com[^>]*>[\s\S]*?<\/script>/gi, '');
+            html = html.replace(/<script[^>]*editorbar[^>]*>[\s\S]*?<\/script>/gi, '');
+            html = html.replace(/<div[^>]*id="__framer-badge-container"[^>]*>[\s\S]*?<\/div>/gi, '');
+            html = html.replace(/Made in Framer/gi, '');
+            return html;
+          }
+          async function scrapeAllPages() {
+            console.log('═══════════════════════════════════════════════');
+            console.log('  FRAMER → GITHUB PAGES PRODUCTION EXPORT');
+            console.log('═══════════════════════════════════════════════');
+            console.log(`  Source:  ${BASE_URL}`);
+            console.log(`  Domain:  ${SITE_DOMAIN}`);
+            console.log('═══════════════════════════════════════════════\n');
+            const browser = await puppeteer.launch({
+              headless: 'new',
+              args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+            });
+            const pagesToVisit = ['/'];
+            while (pagesToVisit.length > 0) {
+              const pagePath = pagesToVisit.shift();
+              const fullUrl = `${BASE_URL}${pagePath.startsWith('/') ? '' : '/'}${pagePath}`;
+              const normalised = new URL(fullUrl).pathname.replace(/\/$/, '') || '/';
+              if (VISITED.has(normalised)) continue;
+              VISITED.add(normalised);
+              if (!fullUrl.startsWith(BASE_URL)) continue;
+              console.log(`\n📄 PAGE: ${normalised}`);
+              console.log('─'.repeat(50));
+              const { html, links, assetUrls } = await getRenderedPage(browser, fullUrl);
+              let processedHtml = html;
+              console.log(`  Found ${assetUrls.length} external assets`);
+              for (const assetUrl of assetUrls) {
+                const localPath = await downloadAsset(assetUrl);
+                if (localPath) {
+                  const htmlFilePath = urlToFilePath(fullUrl);
+                  const htmlDir = path.dirname(htmlFilePath);
+                  const relPath = path.relative(htmlDir, localPath) || localPath;
+                  processedHtml = processedHtml.split(assetUrl).join(relPath);
+                }
+              }
+              processedHtml = processedHtml.replace(
+                /https:\/\/framerusercontent\.com\/images\/([^\s"')\]]+)/g,
+                (match) => {
+                  if (ASSETS_MAP.has(match)) {
+                    const htmlFilePath = urlToFilePath(fullUrl);
+                    const htmlDir = path.dirname(htmlFilePath);
+                    return path.relative(htmlDir, ASSETS_MAP.get(match)) || ASSETS_MAP.get(match);
+                  }
+                  return match;
+                }
+              );
+              processedHtml = processHTML(processedHtml, normalised);
+              const filePath = path.join(OUTPUT_DIR, urlToFilePath(fullUrl));
+              const fileDir = path.dirname(filePath);
+              if (!fs.existsSync(fileDir)) fs.mkdirSync(fileDir, { recursive: true });
+              fs.writeFileSync(filePath, `<!DOCTYPE html>\n${processedHtml}`);
+              console.log(`  💾 Saved: ${filePath}`);
+              ALL_PAGES.push({ path: normalised, lastmod: new Date().toISOString().split('T')[0] });
+              for (const link of links) {
+                let resolved;
+                if (link.startsWith('./')) {
+                  resolved = new URL(link, fullUrl).pathname;
+                } else if (link.startsWith('/')) {
+                  resolved = link;
+                } else continue;
+                resolved = resolved.replace(/\/$/, '') || '/';
+                if (!VISITED.has(resolved)) pagesToVisit.push(resolved);
+              }
+            }
+            await browser.close();
+            let sitemap = '<?xml version="1.0" encoding="UTF-8"?>\n';
+            sitemap += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
+            for (const page of ALL_PAGES) {
+              const loc = `https://${SITE_DOMAIN}${page.path === '/' ? '' : page.path}`;
+              const priority = page.path === '/' ? '1.0' : '0.7';
+              const changefreq = page.path === '/' ? 'weekly' : 'monthly';
+              sitemap += `  <url>\n    <loc>${loc}</loc>\n    <lastmod>${page.lastmod}</lastmod>\n    <changefreq>${changefreq}</changefreq>\n    <priority>${priority}</priority>\n  </url>\n`;
+            }
+            sitemap += '</urlset>';
+            fs.writeFileSync(path.join(OUTPUT_DIR, 'sitemap.xml'), sitemap);
+            console.log('\n📋 Generated sitemap.xml');
+            const robots = [
+              'User-agent: *',
+              'Allow: /',
+              '',
+              `Sitemap: https://${SITE_DOMAIN}/sitemap.xml`,
+              '',
+              '# Block Framer editor paths',
+              'Disallow: /edit',
+              'Disallow: /api',
+              '',
+            ].join('\n');
+            fs.writeFileSync(path.join(OUTPUT_DIR, 'robots.txt'), robots);
+            console.log('🤖 Generated robots.txt');
+            console.log('\n═══════════════════════════════════════════════');
+            console.log('  EXPORT COMPLETE');
+            console.log('═══════════════════════════════════════════════');
+            console.log(`  Pages scraped:      ${VISITED.size}`);
+            console.log(`  Assets downloaded:   ${ASSETS_MAP.size}`);
+            console.log(`  Total files:         ${VISITED.size + ASSETS_MAP.size + 2}`);
+            console.log('═══════════════════════════════════════════════');
+          }
+          scrapeAllPages().catch(err => {
+            console.error('❌ Fatal error:', err);
+            process.exit(1);
+          });
+          SCRIPT
+      - name: Run scraper
+        env:
+          FRAMER_URL: ${{ env.FRAMER_URL }}
+          SITE_DOMAIN: ${{ env.SITE_DOMAIN }}
+          SITE_NAME: ${{ env.SITE_NAME }}
+        run: node scraper.js
+
+      # ─── POST-PROCESSING ─────────────────────────────────────
+      - name: Post-process & generate 404
+        run: |
+          find site-output -name "*.html" | while read file; do
+            sed -i '/__framer-badge-container/d' "$file"
+            sed -i '/Made in Framer/d' "$file"
+            sed -i '/framer-badge/d' "$file"
+            sed -i '/<a[^>]*framer\.com[^>]*>.*<\/a>/d' "$file"
+            sed -i 's/<script><\/script>//g' "$file"
+            sed -i '/<script>\s*<\/script>/d' "$file"
+          done
+          cat > site-output/404.html << 'EOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Page Not Found | J Sinclair Studio</title>
+            <meta name="robots" content="noindex">
+            <style>
+              * { margin: 0; padding: 0; box-sizing: border-box; }
+              body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                display: flex; align-items: center; justify-content: center;
+                min-height: 100vh; background: #0a0a0a; color: #fafafa;
+              }
+              .container { text-align: center; padding: 2rem; }
+              h1 { font-size: 4rem; font-weight: 200; margin-bottom: 1rem; letter-spacing: -0.02em; }
+              p { font-size: 1.1rem; color: #888; margin-bottom: 2rem; }
+              a {
+                color: #fafafa; text-decoration: none;
+                border-bottom: 1px solid #444; padding-bottom: 2px;
+                transition: border-color 0.2s;
+              }
+              a:hover { border-color: #fafafa; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1>404</h1>
+              <p>This page doesn't exist.</p>
+              <a href="/">Back to home</a>
+            </div>
+          </body>
+          </html>
+          EOF
+          echo ""
+          echo "📁 Final site structure:"
+          echo "═══════════════════════════════════════════════"
+          find site-output -type f | sort
+          echo "═══════════════════════════════════════════════"
+          echo "Total files: $(find site-output -type f | wc -l)"
+          echo ""
+          echo "Asset sizes:"
+          du -sh site-output/assets/* 2>/dev/null || echo "  No asset subdirs"
+          echo ""
+          echo "Total site size:"
+          du -sh site-output
+
+      # ─── DEPLOY ──────────────────────────────────────────────
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v4
+        with:
+          enablement: true
+
+      - name: Delete old artifact
+        run: |
+          gh api repos/${{ github.repository }}/actions/artifacts \
+            --jq '.artifacts[] | select(.name=="github-pages") | .id' \
+          | while read id; do
+              gh api -X DELETE repos/${{ github.repository }}/actions/artifacts/$id || true
+            done
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'site-output'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
