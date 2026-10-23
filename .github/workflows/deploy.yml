@@ -20,6 +20,8 @@ env:
   FRAMER_URL: "https://jsinclairstudiotesr.framer.website"
   SITE_DOMAIN: "jsinclairstudio.com"
   SITE_NAME: "J Sinclair Studio"
+  # Paste your IDs here. GA4: Admin > Data streams > Measurement ID (G-...).
+  # Clarity: Settings > Overview > Project ID.
   GA4_ID: "G-2790B7N5TG"
   CLARITY_ID: "xqi6qnyg7d"
 
@@ -37,18 +39,18 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install dependencies
-        run: npm install puppeteer
+        run: npm install puppeteer@24
 
       # ─── SCRAPER SCRIPT ─────────────────────────────────────
       - name: Create scraper script
@@ -198,14 +200,14 @@ jobs:
             if (ASSETS_MAP.has(url)) return ASSETS_MAP.get(url);
             const subdir = getAssetSubdir(url);
             const ext = getExtFromUrl(url);
-            const filename = `subdir-{++assetCounter}${ext}`;
+            const filename = `${subdir}-${++assetCounter}${ext}`;
             const localPath = path.join(ASSETS_DIR, subdir, filename);
-            const relativePath = `assets/subdir/{filename}`;
+            const relativePath = `assets/${subdir}/${filename}`;
             console.log(`    📦 Downloading: ${url.substring(0, 80)}...`);
             const success = await downloadFile(url, localPath);
             if (success && fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
               const size = (fs.statSync(localPath).size / 1024).toFixed(1);
-              console.log(`    ✅ relativePath({size} KiB)`);
+              console.log(`    ✅ ${relativePath} (${size} KiB)`);
               ASSETS_MAP.set(url, relativePath);
               return relativePath;
             } else {
@@ -340,7 +342,7 @@ jobs:
                 const matches = style.match(/url\(["']?(https?:\/\/[^"')]+)["']?\)/g);
                 if (matches) {
                   matches.forEach(m => {
-                    const url = m.replace(/url["']?/,'').replace(/["']?/, '');
+                    const url = m.replace(/url\(["']?/, '').replace(/["']?\)/, '');
                     assetUrls.add(url);
                   });
                 }
@@ -348,7 +350,7 @@ jobs:
               const cssUrlMatches = allCSS.match(/url\(["']?(https?:\/\/[^"')]+)["']?\)/g);
               if (cssUrlMatches) {
                 cssUrlMatches.forEach(m => {
-                  const url = m.replace(/url["']?/,'').replace(/["']?/, '');
+                  const url = m.replace(/url\(["']?/, '').replace(/["']?\)/, '');
                   assetUrls.add(url);
                 });
               }
@@ -460,7 +462,7 @@ jobs:
             const pagesToVisit = [...SEED_PAGES];
             while (pagesToVisit.length > 0) {
               const pagePath = pagesToVisit.shift();
-              const fullUrl = `BASEURL{pagePath.startsWith('/') ? '' : '/'}${pagePath}`;
+              const fullUrl = `${BASE_URL}${pagePath.startsWith('/') ? '' : '/'}${pagePath}`;
               const normalised = new URL(fullUrl).pathname.replace(/\/$/, '') || '/';
               if (VISITED.has(normalised)) continue;
               VISITED.add(normalised);
@@ -512,7 +514,7 @@ jobs:
             let sitemap = '<?xml version="1.0" encoding="UTF-8"?>\n';
             sitemap += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
             for (const page of ALL_PAGES.filter(p => !UNLISTED.includes(p.path))) {
-              const loc = `https://SITEDOMAIN{page.path === '/' ? '' : page.path}`;
+              const loc = `https://${SITE_DOMAIN}${page.path === '/' ? '' : page.path}`;
               const priority = page.path === '/' ? '1.0' : '0.7';
               const changefreq = page.path === '/' ? 'weekly' : 'monthly';
               sitemap += `  <url>\n    <loc>${loc}</loc>\n    <lastmod>${page.lastmod}</lastmod>\n    <changefreq>${changefreq}</changefreq>\n    <priority>${priority}</priority>\n  </url>\n`;
@@ -616,7 +618,7 @@ jobs:
 
       # ─── DEPLOY ──────────────────────────────────────────────
       - name: Setup GitHub Pages
-        uses: actions/configure-pages@v4
+        uses: actions/configure-pages@v5
         with:
           enablement: true
 
@@ -625,17 +627,16 @@ jobs:
           gh api repos/${{ github.repository }}/actions/artifacts \
             --jq '.artifacts[] | select(.name=="github-pages") | .id' \
           | while read id; do
-              gh api -X DELETE repos/github.repository/actions/artifacts/id || true
+              gh api -X DELETE repos/${{ github.repository }}/actions/artifacts/$id || true
             done
         env:
           GH_TOKEN: ${{ github.token }}
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: 'site-output'
 
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
