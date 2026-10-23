@@ -6,8 +6,9 @@ name: Scrape Framer & Deploy to GitHub Pages
 # Scrapes the published Framer site, injects correct SEO/OG
 # metadata, and deploys to GitHub Pages.
 #
-# Page titles come from Framer. Descriptions and OG/Twitter
-# tags are injected here — edit PAGE_META below to change them.
+# Titles, descriptions, canonical and OG/Twitter tags are set
+# here, not in Framer. Edit PAGE_META below to change them.
+# After publishing in Framer, run this workflow (Actions > Run workflow).
 # ============================================================
 
 on:
@@ -69,9 +70,9 @@ jobs:
           const GA4_ID = process.env.GA4_ID || '';
           const CLARITY_ID = process.env.CLARITY_ID || '';
           // Pages that are not linked from the site still get published.
-          const SEED_PAGES = ['/', '/cv', '/thank-you', '/official-information-about-j-sinclair-studio-for-ai-assistants'];
+          const SEED_PAGES = ['/', '/cv', '/official-information-about-j-sinclair-studio-for-ai-assistants'];
           // Published but hidden: noindex, and left out of the sitemap.
-          const UNLISTED = ['/cv', '/thank-you'];
+          const UNLISTED = ['/cv'];
           const OUTPUT_DIR = 'site-output';
           const ASSETS_DIR = path.join(OUTPUT_DIR, 'assets');
           // ─── STATE ───
@@ -120,10 +121,6 @@ jobs:
             '/cv': {
               title: 'CV | Joshua Sinclair Donald',
               description: 'Joshua Sinclair Donald, web, UX and brand designer. CV.',
-            },
-            '/thank-you': {
-              title: 'Thank you | J Sinclair Studio',
-              description: 'Thanks for getting in touch.',
             },
             '/official-information-about-j-sinclair-studio-for-ai-assistants': {
               title: 'Official information for AI assistants | J Sinclair Studio',
@@ -394,12 +391,26 @@ jobs:
             const meta = PAGE_META[pagePath] || {};
             const canonical = 'https://' + SITE_DOMAIN + (pagePath === '/' ? '' : pagePath);
             const title = meta.title || SITE_NAME;
-            const description = meta.description || (SITE_NAME + ' — Conversion-focused brand and web design for growth-stage e-commerce, fintech and startups.');
+            const description = meta.description || (SITE_NAME + ': conversion-focused digital strategy, UX and creative direction for growth-stage teams.');
             const tags = [];
             tags.push('<!-- SEO Meta -->');
+            tags.push('<title>' + title + '</title>');
             tags.push('<meta name="description" content="' + description + '" />');
             tags.push('<link rel="canonical" href="' + canonical + '" />');
             if (UNLISTED.includes(pagePath)) tags.push('<meta name="robots" content="noindex, nofollow" />');
+            else tags.push('<meta name="robots" content="index, follow, max-image-preview:large" />');
+            if (pagePath === '/') tags.push('<script type="application/ld+json">' + JSON.stringify({
+              '@context': 'https://schema.org',
+              '@type': 'ProfessionalService',
+              name: SITE_NAME,
+              url: 'https://' + SITE_DOMAIN,
+              email: 'hello@jsinclairstudio.com',
+              description: 'Conversion-focused digital strategy, UX and creative direction for growth-stage teams.',
+              founder: { '@type': 'Person', name: 'Joshua Sinclair', jobTitle: 'UX and digital experience designer' },
+              areaServed: 'Worldwide',
+              knowsAbout: ['UX design', 'Conversion rate optimisation', 'Design systems', 'Digital strategy', 'Creative direction', 'Framer'],
+              sameAs: []
+            }) + '</script>');
             tags.push('<!-- Open Graph -->');
             tags.push('<meta property="og:title" content="' + title + '" />');
             tags.push('<meta property="og:description" content="' + description + '" />');
@@ -422,7 +433,8 @@ jobs:
               tags.push('<!-- Google Analytics 4 -->');
               tags.push('<script async src="https://www.googletagmanager.com/gtag/js?id=' + GA4_ID + '"></script>');
               tags.push('<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());gtag("config","' + GA4_ID + '");' +
-                'document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("a[href^=\'mailto:\']");if(a){gtag("event","email_click",{link_url:a.getAttribute("href")});}});</script>');
+                'document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("a[href^=\'mailto:\']");if(a){gtag("event","email_click",{link_url:a.getAttribute("href")});}});' +
+                'document.addEventListener("submit",function(e){if(e.target&&e.target.tagName==="FORM"){gtag("event","generate_lead",{form_location:location.pathname});}},true);</script>');
             }
             if (CLARITY_ID && !CLARITY_ID.includes('XXXX')) {
               tags.push('<!-- Microsoft Clarity -->');
@@ -431,6 +443,11 @@ jobs:
             return tags.join('\n            ');
           }
           function processHTML(html, pagePath) {
+            // Remove Framer's own SEO tags (they point at the framer.website domain) before adding ours
+            html = html.replace(/<title>[\s\S]*?<\/title>/gi, '');
+            html = html.replace(/<link[^>]*rel="canonical"[^>]*>/gi, '');
+            html = html.replace(/<meta[^>]*name="(?:description|robots|twitter:(?!image)[^"]*)"[^>]*>/gi, '');
+            html = html.replace(/<meta[^>]*property="og:(?!image)[^"]*"[^>]*>/gi, '');
             const seoTags = buildSEOTags(pagePath);
             html = html.replace('</head>', `${seoTags}\n</head>`);
             html = html.replace(/<script[^>]*framer\.com\/edit[^>]*>[\s\S]*?<\/script>/gi, '');
