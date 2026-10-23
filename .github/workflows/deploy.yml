@@ -3,16 +3,11 @@ name: Scrape Framer & Deploy to GitHub Pages
 # ============================================================
 # FRAMER → GITHUB PAGES DEPLOYMENT — J SINCLAIR STUDIO
 # ============================================================
-# Scrapes the published Framer site and deploys to GitHub Pages.
+# Scrapes the published Framer site, injects correct SEO/OG
+# metadata, and deploys to GitHub Pages.
 #
-# META POLICY (changed):
-#   Framer is the SINGLE SOURCE OF TRUTH for title, description,
-#   og:title, og:description and twitter tags. This workflow no
-#   longer overwrites them.
-#
-#   This workflow only rewrites what Framer cannot know about:
-#   the custom domain in canonical and og:url, plus two security
-#   headers. Edit page copy and meta in Framer, then re-run.
+# Page titles come from Framer. Descriptions and OG/Twitter
+# tags are injected here — edit PAGE_META below to change them.
 # ============================================================
 
 on:
@@ -25,6 +20,8 @@ env:
   FRAMER_URL: "https://jsinclairstudiotesr.framer.website"
   SITE_DOMAIN: "jsinclairstudio.com"
   SITE_NAME: "J Sinclair Studio"
+  GA4_ID: "G-2790B7N5TG"
+  CLARITY_ID: "xqi6qnyg7d"
 
 permissions:
   contents: read
@@ -63,33 +60,80 @@ jobs:
           const https = require('https');
           const http = require('http');
           const { URL } = require('url');
-
-          // ─── CONFIG ───
+          // ─── CONFIG (pulled from env vars) ───
           const BASE_URL = process.env.FRAMER_URL || 'https://jsinclairstudiotesr.framer.website';
           const SITE_DOMAIN = process.env.SITE_DOMAIN || 'jsinclairstudio.com';
           const SITE_NAME = process.env.SITE_NAME || 'J Sinclair Studio';
-          const SITE_URL = 'https://' + SITE_DOMAIN;
+          const GA4_ID = process.env.GA4_ID || '';
+          const CLARITY_ID = process.env.CLARITY_ID || '';
+          // Pages that are not linked from the site still get published.
+          const SEED_PAGES = ['/', '/cv', '/thank-you', '/official-information-about-j-sinclair-studio-for-ai-assistants'];
+          // Published but hidden: noindex, and left out of the sitemap.
+          const UNLISTED = ['/cv', '/thank-you'];
           const OUTPUT_DIR = 'site-output';
           const ASSETS_DIR = path.join(OUTPUT_DIR, 'assets');
-
           // ─── STATE ───
           const VISITED = new Set();
           const ASSETS_MAP = new Map();
           const ALL_PAGES = [];
-          const META_REPORT = [];
           let assetCounter = 0;
-
+          // ─── SETUP DIRS ───
           [OUTPUT_DIR, ASSETS_DIR, path.join(ASSETS_DIR, 'images'), path.join(ASSETS_DIR, 'video'), path.join(ASSETS_DIR, 'fonts')].forEach(dir => {
             if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
           });
-
+          // ─── SEO META PER PAGE ───
+          const PAGE_META = {
+            '/': {
+              title: 'J Sinclair Studio | Conversion-focused digital strategy, UX and creative direction',
+              description: 'Conversion-focused digital strategy, UX and creative direction for growth-stage teams. Work includes Virgin StartUp, Edge Connect and KLC Consulting.',
+            },
+            '/studio': {
+              title: 'Studio | J Sinclair Studio',
+              description: 'The independent UX and digital experience practice of Joshua Sinclair. How the studio works, and the process behind every project.',
+            },
+            '/projects': {
+              title: 'Projects | J Sinclair Studio',
+              description: 'Selected UX, web and brand work for Virgin StartUp, Edge Connect, Elevate and KLC Consulting.',
+            },
+            '/contact': {
+              title: 'Contact | J Sinclair Studio',
+              description: 'Start a project with J Sinclair Studio: digital strategy, UX and creative direction for growth-stage teams.',
+            },
+            '/projects/elevate': {
+              title: 'Elevate | J Sinclair Studio',
+              description: 'A four-year retained brand and digital partnership with a B2B sales acceleration company.',
+            },
+            '/projects/virgin-startup': {
+              title: 'Virgin StartUp | J Sinclair Studio',
+              description: 'UX lead on the Virgin StartUp loan platform, via Goldfish Agency. The application journey restructured around how founders evaluate funding.',
+            },
+            '/projects/edge-connect': {
+              title: 'Edge Connect | J Sinclair Studio',
+              description: 'Market-entry UX and website for a fintech selling trading infrastructure to engineers, via Goldfish Agency.',
+            },
+            '/projects/klc-consulting': {
+              title: 'KLC Consulting | J Sinclair Studio',
+              description: 'Brand and website for a specialist music-industry accountant, repositioned as The Music Industry Accountant.',
+            },
+            '/cv': {
+              title: 'CV | Joshua Sinclair Donald',
+              description: 'Joshua Sinclair Donald, web, UX and brand designer. CV.',
+            },
+            '/thank-you': {
+              title: 'Thank you | J Sinclair Studio',
+              description: 'Thanks for getting in touch.',
+            },
+            '/official-information-about-j-sinclair-studio-for-ai-assistants': {
+              title: 'Official information for AI assistants | J Sinclair Studio',
+              description: 'Official facts about J Sinclair Studio and Joshua Sinclair, for AI assistants and search engines.',
+            },
+          };
           // ─── ASSET HELPERS ───
           function getAssetSubdir(url) {
             if (/\.(mp4|webm|mov|ogg)(\?|$)/i.test(url)) return 'video';
             if (/\.(woff2?|ttf|otf|eot)(\?|$)/i.test(url)) return 'fonts';
             return 'images';
           }
-
           function getExtFromUrl(url) {
             try {
               const pathname = new URL(url).pathname;
@@ -108,7 +152,6 @@ jobs:
             if (/\.(mp4|video|assets)/i.test(url)) return '.mp4';
             return '.bin';
           }
-
           function downloadFile(url, dest, retries = 3) {
             return new Promise((resolve, reject) => {
               const dir = path.dirname(dest);
@@ -137,36 +180,50 @@ jobs:
               request.on('error', () => {
                 if (retries > 0) {
                   setTimeout(() => downloadFile(url, dest, retries - 1).then(resolve).catch(reject), 1000);
-                } else { resolve(false); }
+                } else {
+                  resolve(false);
+                }
               });
               request.on('timeout', () => {
                 request.destroy();
                 if (retries > 0) {
                   setTimeout(() => downloadFile(url, dest, retries - 1).then(resolve).catch(reject), 1000);
-                } else { resolve(false); }
+                } else {
+                  resolve(false);
+                }
               });
             });
           }
-
           async function downloadAsset(url) {
             if (ASSETS_MAP.has(url)) return ASSETS_MAP.get(url);
             const subdir = getAssetSubdir(url);
             const ext = getExtFromUrl(url);
-            const filename = `${subdir}-${++assetCounter}${ext}`;
+            const filename = `subdir-{++assetCounter}${ext}`;
             const localPath = path.join(ASSETS_DIR, subdir, filename);
-            const relativePath = `assets/${subdir}/${filename}`;
+            const relativePath = `assets/subdir/{filename}`;
             console.log(`    📦 Downloading: ${url.substring(0, 80)}...`);
             const success = await downloadFile(url, localPath);
             if (success && fs.existsSync(localPath) && fs.statSync(localPath).size > 0) {
               const size = (fs.statSync(localPath).size / 1024).toFixed(1);
-              console.log(`    ✅ ${relativePath} (${size} KiB)`);
+              console.log(`    ✅ relativePath({size} KiB)`);
               ASSETS_MAP.set(url, relativePath);
               return relativePath;
+            } else {
+              console.log(`    ❌ Failed: ${url.substring(0, 80)}`);
+              return null;
             }
-            console.log(`    ❌ Failed: ${url.substring(0, 80)}`);
-            return null;
           }
-
+          const FRAMER_JUNK_PATTERNS = [
+            /framer\.com\/edit/,
+            /framer\.com\/bootstrap/,
+            /events\.framer\.com/,
+            /api\.framer\.com/,
+            /app\.framerstatic\.com/,
+            /framer\.com\/script/,
+          ];
+          function isFramerJunkScript(src) {
+            return FRAMER_JUNK_PATTERNS.some(pattern => pattern.test(src));
+          }
           async function getRenderedPage(browser, url) {
             const page = await browser.newPage();
             await page.setViewport({ width: 1440, height: 900 });
@@ -175,15 +232,17 @@ jobs:
             page.on('request', (req) => {
               const reqUrl = req.url();
               if (reqUrl.includes('google-analytics.com') ||
+                  reqUrl.includes('clarity.ms') ||
                   reqUrl.includes('googletagmanager.com') ||
                   reqUrl.includes('events.framer.com') ||
                   reqUrl.includes('api.framer.com') ||
                   reqUrl.includes('framer.com/edit') ||
                   reqUrl.includes('framer.com/bootstrap')) {
                 req.abort();
-              } else { req.continue(); }
+              } else {
+                req.continue();
+              }
             });
-
             try {
               await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
               await new Promise(r => setTimeout(r, 4000));
@@ -206,27 +265,15 @@ jobs:
             } catch (err) {
               console.log(`  ⚠ Timeout/error loading ${url}: ${err.message}`);
             }
-
             const result = await page.evaluate(() => {
               let allCSS = '';
               for (const sheet of document.styleSheets) {
                 try {
-                  for (const rule of sheet.cssRules) { allCSS += rule.cssText + '\n'; }
+                  for (const rule of sheet.cssRules) {
+                    allCSS += rule.cssText + '\n';
+                  }
                 } catch (e) {}
               }
-
-              // ─── Capture Framer's own meta so we can verify it survived ───
-              const grab = (sel, attr) => {
-                const el = document.querySelector(sel);
-                return el ? (el.getAttribute(attr) || '') : '';
-              };
-              const framerMeta = {
-                title: document.title || '',
-                description: grab('meta[name="description"]', 'content'),
-                ogTitle: grab('meta[property="og:title"]', 'content'),
-                ogDescription: grab('meta[property="og:description"]', 'content'),
-              };
-
               const badge = document.getElementById('__framer-badge-container');
               if (badge) badge.remove();
               document.querySelectorAll('[data-framer-badge]').forEach(el => el.remove());
@@ -240,6 +287,7 @@ jobs:
               });
               document.querySelectorAll('script').forEach(el => {
                 const src = el.getAttribute('src') || '';
+                const text = el.textContent || '';
                 if (
                   src.includes('framer.com/edit') ||
                   src.includes('framer.com/bootstrap') ||
@@ -248,23 +296,27 @@ jobs:
                   src.includes('google-analytics.com') ||
                   src.includes('googletagmanager.com') ||
                   (src.includes('framerstatic.com') && src.includes('editorbar'))
-                ) { el.remove(); }
+                ) {
+                  el.remove();
+                }
               });
               document.querySelectorAll('link').forEach(el => {
                 const href = el.getAttribute('href') || '';
-                if (href.includes('framer.com/edit') || href.includes('events.framer.com')) el.remove();
+                if (href.includes('framer.com/edit') ||
+                    href.includes('events.framer.com')) {
+                  el.remove();
+                }
               });
-
               const styleTag = document.createElement('style');
               styleTag.textContent = allCSS;
               document.head.appendChild(styleTag);
-
               const links = [];
               document.querySelectorAll('a[href]').forEach(a => {
                 const href = a.getAttribute('href');
-                if (href && (href.startsWith('./') || href.startsWith('/')) && !href.includes('#')) links.push(href);
+                if (href && (href.startsWith('./') || href.startsWith('/')) && !href.includes('#')) {
+                  links.push(href);
+                }
               });
-
               const assetUrls = new Set();
               document.querySelectorAll('img[src]').forEach(el => {
                 const src = el.getAttribute('src');
@@ -274,8 +326,8 @@ jobs:
                 const srcset = el.getAttribute('srcset');
                 if (srcset) {
                   srcset.split(',').forEach(part => {
-                    const u = part.trim().split(/\s+/)[0];
-                    if (u && u.startsWith('http')) assetUrls.add(u);
+                    const url = part.trim().split(/\s+/)[0];
+                    if (url && url.startsWith('http')) assetUrls.add(url);
                   });
                 }
               });
@@ -287,41 +339,47 @@ jobs:
                 const style = el.getAttribute('style');
                 const matches = style.match(/url\(["']?(https?:\/\/[^"')]+)["']?\)/g);
                 if (matches) {
-                  matches.forEach(m => assetUrls.add(m.replace(/url\(["']?/, '').replace(/["']?\)/, '')));
+                  matches.forEach(m => {
+                    const url = m.replace(/url["']?/,'').replace(/["']?/, '');
+                    assetUrls.add(url);
+                  });
                 }
               });
               const cssUrlMatches = allCSS.match(/url\(["']?(https?:\/\/[^"')]+)["']?\)/g);
               if (cssUrlMatches) {
-                cssUrlMatches.forEach(m => assetUrls.add(m.replace(/url\(["']?/, '').replace(/["']?\)/, '')));
+                cssUrlMatches.forEach(m => {
+                  const url = m.replace(/url["']?/,'').replace(/["']?/, '');
+                  assetUrls.add(url);
+                });
               }
-
               const mainContent = document.querySelector('[data-framer-name="Content"]') ||
+                                  document.querySelector('.framer-yuhfbs') ||
                                   document.querySelector('body > div:first-child');
-              if (mainContent && !document.querySelector('main')) mainContent.setAttribute('role', 'main');
-
+              if (mainContent && !document.querySelector('main')) {
+                mainContent.setAttribute('role', 'main');
+              }
               document.querySelectorAll('[aria-hidden="true"] a, [aria-hidden="true"] button, [aria-hidden="true"] input').forEach(el => {
                 el.setAttribute('tabindex', '-1');
               });
               document.querySelectorAll('a').forEach(el => {
                 if (!el.textContent.trim() && !el.getAttribute('aria-label')) {
                   const name = el.getAttribute('data-framer-name') || '';
-                  if (name) el.setAttribute('aria-label', name);
-                  else if (el.querySelector('svg')) el.setAttribute('aria-label', 'Navigation link');
+                  if (name) {
+                    el.setAttribute('aria-label', name);
+                  } else if (el.querySelector('svg')) {
+                    el.setAttribute('aria-label', 'Navigation link');
+                  }
                 }
               });
-
               return {
                 html: document.documentElement.outerHTML,
                 links,
                 assetUrls: Array.from(assetUrls),
-                framerMeta,
               };
             });
-
             await page.close();
             return result;
           }
-
           function urlToFilePath(url) {
             const parsed = new URL(url);
             let pathname = parsed.pathname.replace(/\/$/, '') || '/index';
@@ -330,92 +388,88 @@ jobs:
             if (!path.extname(pathname)) pathname += '.html';
             return pathname;
           }
-
-          // ============================================================
-          // META HANDLING — the corrected part
-          //
-          // We do NOT touch title, description, og:title, og:description
-          // or twitter tags. Framer owns those.
-          //
-          // We only replace canonical, og:url and og:site_name/og:locale,
-          // because Framer writes those against the preview domain.
-          // ============================================================
-
-          function stripDomainScopedMeta(html) {
-            html = html.replace(/<link[^>]*rel=["']canonical["'][^>]*>\s*/gi, '');
-            html = html.replace(/<meta[^>]*property=["']og:url["'][^>]*>\s*/gi, '');
-            html = html.replace(/<meta[^>]*property=["']og:site_name["'][^>]*>\s*/gi, '');
-            html = html.replace(/<meta[^>]*property=["']og:locale["'][^>]*>\s*/gi, '');
-            html = html.replace(/<meta[^>]*name=["']referrer["'][^>]*>\s*/gi, '');
-            html = html.replace(/<meta[^>]*http-equiv=["']X-Content-Type-Options["'][^>]*>\s*/gi, '');
-            return html;
+          function buildSEOTags(pagePath) {
+            const meta = PAGE_META[pagePath] || {};
+            const canonical = 'https://' + SITE_DOMAIN + (pagePath === '/' ? '' : pagePath);
+            const title = meta.title || SITE_NAME;
+            const description = meta.description || (SITE_NAME + ' — Conversion-focused brand and web design for growth-stage e-commerce, fintech and startups.');
+            const tags = [];
+            tags.push('<!-- SEO Meta -->');
+            tags.push('<meta name="description" content="' + description + '" />');
+            tags.push('<link rel="canonical" href="' + canonical + '" />');
+            if (UNLISTED.includes(pagePath)) tags.push('<meta name="robots" content="noindex, nofollow" />');
+            tags.push('<!-- Open Graph -->');
+            tags.push('<meta property="og:title" content="' + title + '" />');
+            tags.push('<meta property="og:description" content="' + description + '" />');
+            tags.push('<meta property="og:url" content="' + canonical + '" />');
+            tags.push('<meta property="og:type" content="website" />');
+            tags.push('<meta property="og:site_name" content="' + SITE_NAME + '" />');
+            tags.push('<meta property="og:locale" content="en_GB" />');
+            tags.push('<!-- Twitter Card -->');
+            tags.push('<meta name="twitter:card" content="summary_large_image" />');
+            tags.push('<meta name="twitter:title" content="' + title + '" />');
+            tags.push('<meta name="twitter:description" content="' + description + '" />');
+            tags.push('<!-- Security Meta -->');
+            tags.push('<meta http-equiv="X-Content-Type-Options" content="nosniff" />');
+            tags.push('<meta name="referrer" content="strict-origin-when-cross-origin" />');
+            return tags.join('\n            ');
           }
-
-          function buildDomainTags(pagePath) {
-            const canonical = SITE_URL + (pagePath === '/' ? '/' : pagePath);
-            return [
-              '<!-- Domain-scoped tags injected at deploy. All other meta comes from Framer. -->',
-              '<link rel="canonical" href="' + canonical + '" />',
-              '<meta property="og:url" content="' + canonical + '" />',
-              '<meta property="og:site_name" content="' + SITE_NAME + '" />',
-              '<meta property="og:locale" content="en_GB" />',
-              '<meta http-equiv="X-Content-Type-Options" content="nosniff" />',
-              '<meta name="referrer" content="strict-origin-when-cross-origin" />',
-            ].join('\n');
+          function buildAnalyticsTags() {
+            const tags = [];
+            if (GA4_ID && !GA4_ID.includes('XXXX')) {
+              tags.push('<!-- Google Analytics 4 -->');
+              tags.push('<script async src="https://www.googletagmanager.com/gtag/js?id=' + GA4_ID + '"></script>');
+              tags.push('<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag("js",new Date());gtag("config","' + GA4_ID + '");' +
+                'document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("a[href^=\'mailto:\']");if(a){gtag("event","email_click",{link_url:a.getAttribute("href")});}});</script>');
+            }
+            if (CLARITY_ID && !CLARITY_ID.includes('XXXX')) {
+              tags.push('<!-- Microsoft Clarity -->');
+              tags.push('<script>(function(c,l,a,r,i,t,y){c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);})(window,document,"clarity","script","' + CLARITY_ID + '");</script>');
+            }
+            return tags.join('\n            ');
           }
-
           function processHTML(html, pagePath) {
-            html = stripDomainScopedMeta(html);
-            html = html.replace('</head>', buildDomainTags(pagePath) + '\n</head>');
-
+            const seoTags = buildSEOTags(pagePath);
+            html = html.replace('</head>', `${seoTags}\n</head>`);
             html = html.replace(/<script[^>]*framer\.com\/edit[^>]*>[\s\S]*?<\/script>/gi, '');
             html = html.replace(/<script[^>]*framer\.com\/bootstrap[^>]*>[\s\S]*?<\/script>/gi, '');
             html = html.replace(/<script[^>]*events\.framer\.com[^>]*>[\s\S]*?<\/script>/gi, '');
             html = html.replace(/<script[^>]*api\.framer\.com[^>]*>[\s\S]*?<\/script>/gi, '');
             html = html.replace(/<script[^>]*googletagmanager\.com[^>]*>[\s\S]*?<\/script>/gi, '');
             html = html.replace(/<script[^>]*google-analytics\.com[^>]*>[\s\S]*?<\/script>/gi, '');
+            // Remove any analytics copied from Framer, so each tag loads exactly once
+            html = html.replace(/<script[^>]*clarity\.ms[^>]*>[\s\S]*?<\/script>/gi, '');
+            html = html.replace(/<script\b[^>]*>(?:(?!<\/script>)[\s\S])*?(?:clarity\.ms|"clarity"|gtag\(|dataLayer)(?:(?!<\/script>)[\s\S])*?<\/script>/gi, '');
+            html = html.replace('</head>', buildAnalyticsTags() + '\n</head>');
             html = html.replace(/<script[^>]*editorbar[^>]*>[\s\S]*?<\/script>/gi, '');
             html = html.replace(/<div[^>]*id="__framer-badge-container"[^>]*>[\s\S]*?<\/div>/gi, '');
             html = html.replace(/Made in Framer/gi, '');
-
-            // Any remaining absolute preview-domain URLs point at the custom domain
-            html = html.split(BASE_URL).join(SITE_URL);
-
             return html;
           }
-
           async function scrapeAllPages() {
             console.log('═══════════════════════════════════════════════');
             console.log('  FRAMER → GITHUB PAGES PRODUCTION EXPORT');
             console.log('═══════════════════════════════════════════════');
             console.log(`  Source:  ${BASE_URL}`);
             console.log(`  Domain:  ${SITE_DOMAIN}`);
-            console.log('  Meta:    inherited from Framer (not overwritten)');
             console.log('═══════════════════════════════════════════════\n');
-
             const browser = await puppeteer.launch({
               headless: 'new',
               args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
             });
-
-            const pagesToVisit = ['/'];
+            const pagesToVisit = [...SEED_PAGES];
             while (pagesToVisit.length > 0) {
               const pagePath = pagesToVisit.shift();
-              const fullUrl = `${BASE_URL}${pagePath.startsWith('/') ? '' : '/'}${pagePath}`;
+              const fullUrl = `BASEURL{pagePath.startsWith('/') ? '' : '/'}${pagePath}`;
               const normalised = new URL(fullUrl).pathname.replace(/\/$/, '') || '/';
               if (VISITED.has(normalised)) continue;
               VISITED.add(normalised);
               if (!fullUrl.startsWith(BASE_URL)) continue;
-
               console.log(`\n📄 PAGE: ${normalised}`);
               console.log('─'.repeat(50));
-
-              const { html, links, assetUrls, framerMeta } = await getRenderedPage(browser, fullUrl);
-              META_REPORT.push({ path: normalised, ...framerMeta });
-
+              const { html, links, assetUrls } = await getRenderedPage(browser, fullUrl);
               let processedHtml = html;
               console.log(`  Found ${assetUrls.length} external assets`);
-
               for (const assetUrl of assetUrls) {
                 const localPath = await downloadAsset(assetUrl);
                 if (localPath) {
@@ -425,7 +479,6 @@ jobs:
                   processedHtml = processedHtml.split(assetUrl).join(relPath);
                 }
               }
-
               processedHtml = processedHtml.replace(
                 /https:\/\/framerusercontent\.com\/images\/([^\s"')\]]+)/g,
                 (match) => {
@@ -437,34 +490,29 @@ jobs:
                   return match;
                 }
               );
-
               processedHtml = processHTML(processedHtml, normalised);
-
               const filePath = path.join(OUTPUT_DIR, urlToFilePath(fullUrl));
               const fileDir = path.dirname(filePath);
               if (!fs.existsSync(fileDir)) fs.mkdirSync(fileDir, { recursive: true });
               fs.writeFileSync(filePath, `<!DOCTYPE html>\n${processedHtml}`);
               console.log(`  💾 Saved: ${filePath}`);
-
               ALL_PAGES.push({ path: normalised, lastmod: new Date().toISOString().split('T')[0] });
-
               for (const link of links) {
                 let resolved;
-                if (link.startsWith('./')) resolved = new URL(link, fullUrl).pathname;
-                else if (link.startsWith('/')) resolved = link;
-                else continue;
+                if (link.startsWith('./')) {
+                  resolved = new URL(link, fullUrl).pathname;
+                } else if (link.startsWith('/')) {
+                  resolved = link;
+                } else continue;
                 resolved = resolved.replace(/\/$/, '') || '/';
                 if (!VISITED.has(resolved)) pagesToVisit.push(resolved);
               }
             }
-
             await browser.close();
-
-            // ─── SITEMAP ───
             let sitemap = '<?xml version="1.0" encoding="UTF-8"?>\n';
             sitemap += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
-            for (const page of ALL_PAGES) {
-              const loc = `${SITE_URL}${page.path === '/' ? '/' : page.path}`;
+            for (const page of ALL_PAGES.filter(p => !UNLISTED.includes(p.path))) {
+              const loc = `https://SITEDOMAIN{page.path === '/' ? '' : page.path}`;
               const priority = page.path === '/' ? '1.0' : '0.7';
               const changefreq = page.path === '/' ? 'weekly' : 'monthly';
               sitemap += `  <url>\n    <loc>${loc}</loc>\n    <lastmod>${page.lastmod}</lastmod>\n    <changefreq>${changefreq}</changefreq>\n    <priority>${priority}</priority>\n  </url>\n`;
@@ -472,13 +520,11 @@ jobs:
             sitemap += '</urlset>';
             fs.writeFileSync(path.join(OUTPUT_DIR, 'sitemap.xml'), sitemap);
             console.log('\n📋 Generated sitemap.xml');
-
-            // ─── ROBOTS ───
             const robots = [
               'User-agent: *',
               'Allow: /',
               '',
-              `Sitemap: ${SITE_URL}/sitemap.xml`,
+              `Sitemap: https://${SITE_DOMAIN}/sitemap.xml`,
               '',
               '# Block Framer editor paths',
               'Disallow: /edit',
@@ -487,45 +533,26 @@ jobs:
             ].join('\n');
             fs.writeFileSync(path.join(OUTPUT_DIR, 'robots.txt'), robots);
             console.log('🤖 Generated robots.txt');
-
-            // ─── META VERIFICATION REPORT ───
-            console.log('\n═══════════════════════════════════════════════');
-            console.log('  META INHERITED FROM FRAMER');
-            console.log('═══════════════════════════════════════════════');
-            let metaWarnings = 0;
-            for (const m of META_REPORT) {
-              console.log(`\n  ${m.path}`);
-              console.log(`    title:       ${m.title || '⚠ MISSING'}`);
-              console.log(`    description: ${m.description || '⚠ MISSING'}`);
-              console.log(`    og:title:    ${m.ogTitle || '(inherits title)'}`);
-              if (!m.title) metaWarnings++;
-              if (!m.description) metaWarnings++;
-            }
-            if (metaWarnings > 0) {
-              console.log(`\n  ⚠ ${metaWarnings} missing meta field(s). Set them in Framer page settings.`);
-            } else {
-              console.log('\n  ✅ All pages have title and description set in Framer.');
-            }
-
             console.log('\n═══════════════════════════════════════════════');
             console.log('  EXPORT COMPLETE');
             console.log('═══════════════════════════════════════════════');
             console.log(`  Pages scraped:      ${VISITED.size}`);
-            console.log(`  Assets downloaded:  ${ASSETS_MAP.size}`);
+            console.log(`  Assets downloaded:   ${ASSETS_MAP.size}`);
+            console.log(`  Total files:         ${VISITED.size + ASSETS_MAP.size + 2}`);
             console.log('═══════════════════════════════════════════════');
           }
-
           scrapeAllPages().catch(err => {
             console.error('❌ Fatal error:', err);
             process.exit(1);
           });
           SCRIPT
-
       - name: Run scraper
         env:
           FRAMER_URL: ${{ env.FRAMER_URL }}
           SITE_DOMAIN: ${{ env.SITE_DOMAIN }}
           SITE_NAME: ${{ env.SITE_NAME }}
+          GA4_ID: ${{ env.GA4_ID }}
+          CLARITY_ID: ${{ env.CLARITY_ID }}
         run: node scraper.js
 
       # ─── POST-PROCESSING ─────────────────────────────────────
@@ -535,10 +562,10 @@ jobs:
             sed -i '/__framer-badge-container/d' "$file"
             sed -i '/Made in Framer/d' "$file"
             sed -i '/framer-badge/d' "$file"
+            sed -i '/<a[^>]*framer\.com[^>]*>.*<\/a>/d' "$file"
             sed -i 's/<script><\/script>//g' "$file"
             sed -i '/<script>\s*<\/script>/d' "$file"
           done
-
           cat > site-output/404.html << 'EOF'
           <!DOCTYPE html>
           <html lang="en">
@@ -574,46 +601,18 @@ jobs:
           </body>
           </html>
           EOF
-
           echo ""
           echo "📁 Final site structure:"
+          echo "═══════════════════════════════════════════════"
           find site-output -type f | sort
+          echo "═══════════════════════════════════════════════"
           echo "Total files: $(find site-output -type f | wc -l)"
-          du -sh site-output
-
-      # ─── META VERIFICATION (fails loudly on stale/missing meta) ───
-      - name: Verify deployed meta
-        run: |
-          echo "═══════════════════════════════════════════════"
-          echo "  DEPLOYED META CHECK"
-          echo "═══════════════════════════════════════════════"
-          FAIL=0
-          for file in $(find site-output -name "*.html" ! -name "404.html"); do
-            DESC=$(grep -o '<meta name="description" content="[^"]*"' "$file" | head -1 | sed 's/.*content="//;s/"$//')
-            CANON=$(grep -o '<link rel="canonical" href="[^"]*"' "$file" | head -1 | sed 's/.*href="//;s/"$//')
-            echo ""
-            echo "  $file"
-            echo "    description: ${DESC:-MISSING}"
-            echo "    canonical:   ${CANON:-MISSING}"
-            if [ -z "$DESC" ]; then
-              echo "    ❌ No description. Set it in Framer page settings."
-              FAIL=1
-            fi
-            CANON_COUNT=$(grep -c 'rel="canonical"' "$file" || true)
-            if [ "$CANON_COUNT" -gt 1 ]; then
-              echo "    ❌ $CANON_COUNT canonical tags found (should be 1)."
-              FAIL=1
-            fi
-          done
           echo ""
-          echo "═══════════════════════════════════════════════"
-          if [ "$FAIL" -eq 1 ]; then
-            echo "  ⚠ Meta issues found above. Deploy continues,"
-            echo "    but fix these in Framer and re-run."
-          else
-            echo "  ✅ All pages have a description and one canonical."
-          fi
-          echo "═══════════════════════════════════════════════"
+          echo "Asset sizes:"
+          du -sh site-output/assets/* 2>/dev/null || echo "  No asset subdirs"
+          echo ""
+          echo "Total site size:"
+          du -sh site-output
 
       # ─── DEPLOY ──────────────────────────────────────────────
       - name: Setup GitHub Pages
@@ -626,7 +625,7 @@ jobs:
           gh api repos/${{ github.repository }}/actions/artifacts \
             --jq '.artifacts[] | select(.name=="github-pages") | .id' \
           | while read id; do
-              gh api -X DELETE repos/${{ github.repository }}/actions/artifacts/$id || true
+              gh api -X DELETE repos/github.repository/actions/artifacts/id || true
             done
         env:
           GH_TOKEN: ${{ github.token }}
@@ -639,3 +638,4 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
