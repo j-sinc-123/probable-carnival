@@ -118,6 +118,18 @@ jobs:
               title: 'KLC Consulting | J Sinclair Studio',
               description: 'Brand and website for a specialist music-industry accountant, repositioned as The Music Industry Accountant.',
             },
+            '/projects/cheyneys': {
+              title: "Cheyney's | J Sinclair Studio",
+              description: 'Brand strategy and identity for a regenerative farming business.',
+            },
+            '/projects/dama-dama': {
+              title: 'Dama Dama Records | J Sinclair Studio',
+              description: 'Brand, campaigns and creative direction across a decade running an independent record label.',
+            },
+            '/privacy-policy-terms-and-conditions': {
+              title: 'Privacy policy and terms | J Sinclair Studio',
+              description: 'Privacy policy, cookies, terms and conditions for J Sinclair Studio.',
+            },
             '/cv': {
               title: 'CV | Joshua Sinclair Donald',
               description: 'Joshua Sinclair Donald, web, UX and brand designer. CV.',
@@ -446,6 +458,7 @@ jobs:
             // Remove Framer's own SEO tags (they point at the framer.website domain) before adding ours
             html = html.replace(/<title>[\s\S]*?<\/title>/gi, '');
             html = html.replace(/<link[^>]*rel="canonical"[^>]*>/gi, '');
+            html = html.replace(/<link[^>]*data-framer-generated-hreflang[^>]*>/gi, '');
             html = html.replace(/<meta[^>]*name="(?:description|robots|twitter:(?!image)[^"]*)"[^>]*>/gi, '');
             html = html.replace(/<meta[^>]*property="og:(?!image)[^"]*"[^>]*>/gi, '');
             const seoTags = buildSEOTags(pagePath);
