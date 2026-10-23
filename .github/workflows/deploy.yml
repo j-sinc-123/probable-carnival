@@ -461,6 +461,20 @@ jobs:
             html = html.replace(/<link[^>]*data-framer-generated-hreflang[^>]*>/gi, '');
             html = html.replace(/<meta[^>]*name="(?:description|robots|twitter:(?!image)[^"]*)"[^>]*>/gi, '');
             html = html.replace(/<meta[^>]*property="og:(?!image)[^"]*"[^>]*>/gi, '');
+            // Add alt text to images Framer outputs without it (CMS-bound images)
+            const pageLabel = ((PAGE_META[pagePath] || {}).title || SITE_NAME).split(' | ')[0];
+            let imgCount = 0;
+            html = html.replace(/<img\b([^>]*)>/gi, (tag, attrs) => {
+              if (/\balt="[^"]+"/i.test(attrs)) return tag;
+              imgCount++;
+              const cleaned = attrs.replace(/\salt="[^"]*"/i, '');
+              let alt;
+              if (pagePath.startsWith('/projects/')) alt = pageLabel + ' case study, image ' + imgCount;
+              else if (pagePath === '/projects') alt = 'Project cover ' + imgCount;
+              else if (pagePath === '/studio') alt = 'Joshua Sinclair, founder of J Sinclair Studio';
+              else alt = SITE_NAME + ' image ' + imgCount;
+              return '<img alt="' + alt.replace(/"/g, '&quot;') + '"' + cleaned + '>';
+            });
             const seoTags = buildSEOTags(pagePath);
             html = html.replace('</head>', `${seoTags}\n</head>`);
             html = html.replace(/<script[^>]*framer\.com\/edit[^>]*>[\s\S]*?<\/script>/gi, '');
